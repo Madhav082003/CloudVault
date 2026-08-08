@@ -1,34 +1,43 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from database import get_db
 from auth import get_current_user
+from s3 import upload_file_to_s3, generate_presigned_url, delete_file_from_s3
 import models, schemas
-import uuid, os
+import uuid
 
 router = APIRouter(prefix="/documents", tags=["documents"])
-
-UPLOAD_DIR = "./uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 ALLOWED_TYPES = {
-    "pdf": "pdf",
-    "doc": "word", "docx": "word",
-    "xls": "excel", "xlsx": "excel",
-    "png": "image", "jpg": "image", "jpeg": "image", "gif": "image", "webp": "image",
-    "txt": "text", "md": "text", "csv": "text",
-    "zip": "archive", "rar": "archive", "7z": "archive",
-    "mp4": "video", "mov": "video", "avi": "video",
-    "ppt": "powerpoint", "pptx": "powerpoint",
+    "pdf":  "pdf",
+    "doc":  "word",  "docx": "word",
+    "xls":  "excel", "xlsx": "excel",
+    "png":  "image", "jpg":  "image", "jpeg": "image", "gif": "image", "webp": "image",
+    "txt":  "text",  "md":   "text",  "csv":  "text",
+    "zip":  "archive", "rar": "archive", "7z": "archive",
+    "mp4":  "video", "mov": "video", "avi": "video",
+    "ppt":  "powerpoint", "pptx": "powerpoint",
+}
+
+CONTENT_TYPES = {
+    "pdf": "application/pdf",
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "gif": "image/gif", "webp": "image/webp",
+    "txt": "text/plain", "md": "text/markdown", "csv": "text/csv",
+    "mp4": "video/mp4", "mov": "video/quicktime",
 }
 
 def get_file_type(filename: str) -> str:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     return ALLOWED_TYPES.get(ext, "unknown")
+
+def get_content_type(filename: str) -> str:
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return CONTENT_TYPES.get(ext, "application/octet-stream")
 
 
 @router.post("/upload", response_model=schemas.DocumentResponse)
@@ -43,19 +52,17 @@ def upload_document(
         raise HTTPException(status_code=400, detail="File size exceeds 10MB limit")
 
     file_type = get_file_type(file.filename)
+    content_type = get_content_type(file.filename)
+    s3_key = f"users/{current_user.id}/{uuid.uuid4()}_{file.filename}"
 
-    s3_key = f"{current_user.id}/{uuid.uuid4()}_{file.filename}"
-    file_path = os.path.join(UPLOAD_DIR, s3_key.replace("/", "_"))
-
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    upload_file_to_s3(contents, s3_key, content_type)
 
     doc = models.Document(
         filename=file.filename,
         s3_key=s3_key,
         file_size=len(contents),
         file_type=file_type,
-        owner_id=current_user.id
+        owner_id=current_user.id,
     )
     db.add(doc)
     db.commit()
@@ -87,7 +94,7 @@ def get_stats(
     return schemas.StorageStats(
         total_documents=len(docs),
         total_size_bytes=total_size,
-        recent_uploads=recent
+        recent_uploads=recent,
     )
 
 
@@ -98,7 +105,6 @@ def get_analytics(
 ):
     docs = db.query(models.Document).filter(models.Document.owner_id == current_user.id).all()
 
-    # File type breakdown
     type_counts = {}
     type_sizes = {}
     for doc in docs:
@@ -106,17 +112,15 @@ def get_analytics(
         type_counts[ft] = type_counts.get(ft, 0) + 1
         type_sizes[ft] = type_sizes.get(ft, 0) + (doc.file_size or 0)
 
-    # Daily uploads — last 7 days
-    from datetime import date, timedelta
     today = date.today()
     daily = {}
     for i in range(6, -1, -1):
         day = today - timedelta(days=i)
         daily[day.strftime("%a")] = 0
     for doc in docs:
-        day_str = doc.uploaded_at.strftime("%a")
         delta = (today - doc.uploaded_at.date()).days
         if 0 <= delta <= 6:
+            day_str = doc.uploaded_at.strftime("%a")
             daily[day_str] = daily.get(day_str, 0) + 1
 
     return {
@@ -124,6 +128,35 @@ def get_analytics(
         "type_sizes": type_sizes,
         "daily_uploads": daily,
     }
+
+
+@router.get("/download/{document_id}")
+def download_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    from fastapi.responses import StreamingResponse
+    from s3 import s3_client
+    from config import S3_BUCKET_NAME
+
+    doc = db.query(models.Document).filter(
+        models.Document.id == document_id,
+        models.Document.owner_id == current_user.id
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    obj = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=doc.s3_key)
+
+    def iter_content():
+        yield from obj["Body"].iter_chunks(chunk_size=8192)
+
+    return StreamingResponse(
+        iter_content(),
+        media_type=obj.get("ContentType", "application/octet-stream"),
+        headers={"Content-Disposition": f'attachment; filename="{doc.filename}"'}
+    )
 
 
 @router.delete("/{document_id}")
@@ -139,10 +172,7 @@ def delete_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    file_path = os.path.join(UPLOAD_DIR, doc.s3_key.replace("/", "_"))
-    if os.path.exists(file_path):
-        os.remove(file_path)
-
+    delete_file_from_s3(doc.s3_key)
     db.delete(doc)
     db.commit()
     return {"message": "Document deleted"}

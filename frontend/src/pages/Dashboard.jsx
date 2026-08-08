@@ -15,6 +15,22 @@ const FILE_ICONS = {
   unknown:    { icon: "📁", color: "#4a5568", label: "File" },
 };
 
+function ConfirmModal({ filename, onConfirm, onCancel }) {
+  return (
+    <div className="modal-overlay">
+      <div className="modal-box">
+        <div className="modal-icon">🗑️</div>
+        <h3>Delete Document</h3>
+        <p>Are you sure you want to delete <strong>"{filename}"</strong>? This action cannot be undone.</p>
+        <div className="modal-btns">
+          <button className="modal-cancel" onClick={onCancel}>Cancel</button>
+          <button className="modal-confirm" onClick={onConfirm}>Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Toast({ toasts, remove }) {
   return (
     <div className="toast-container">
@@ -51,6 +67,7 @@ export default function Dashboard() {
   const [dragOver, setDragOver] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const fileRef = useRef();
   const navigate = useNavigate();
 
@@ -116,8 +133,33 @@ export default function Dashboard() {
     }
   };
 
-  const handleDelete = async (id, name) => {
-    if (!window.confirm(`Delete "${name}"?`)) return;
+  const handleDownload = async (id, filename) => {
+    try {
+      addToast(`Preparing "${filename}"...`);
+      const res = await API.get(`/documents/download/${id}`, {
+        responseType: "blob",
+      });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      addToast(`"${filename}" downloaded`);
+    } catch {
+      addToast("Download failed", "error");
+    }
+  };
+
+  const handleDelete = (id, name) => {
+    setDeleteTarget({ id, name });
+  };
+
+  const confirmDelete = async () => {
+    const { id, name } = deleteTarget;
+    setDeleteTarget(null);
     try {
       await API.delete(`/documents/${id}`);
       addToast(`"${name}" deleted`);
@@ -160,6 +202,13 @@ export default function Dashboard() {
   return (
     <div className="app-layout">
       <Toast toasts={toasts} remove={removeToast} />
+      {deleteTarget && (
+        <ConfirmModal
+          filename={deleteTarget.name}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
       <Sidebar active="documents" />
 
       {/* Main content */}
@@ -250,9 +299,14 @@ export default function Dashboard() {
                       <td className="file-size">{formatSize(doc.file_size)}</td>
                       <td className="file-date">{formatDate(doc.uploaded_at)}</td>
                       <td>
-                        <button className="action-delete" onClick={() => handleDelete(doc.id, doc.filename)}>
-                          🗑 Delete
-                        </button>
+                        <div className="action-btns">
+                          <button className="action-download" onClick={() => handleDownload(doc.id, doc.filename)}>
+                            ⬇ Download
+                          </button>
+                          <button className="action-delete" onClick={() => handleDelete(doc.id, doc.filename)}>
+                            🗑 Delete
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
