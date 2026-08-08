@@ -21,6 +21,7 @@ class Document(Base):
     filename = Column(String, nullable=False)
     s3_key = Column(String, unique=True, nullable=False)
     file_size = Column(Integer)
+    file_type = Column(String, default="unknown")
     uploaded_at = Column(DateTime, default=datetime.utcnow)
     owner_id = Column(Integer, ForeignKey("users.id"))
 

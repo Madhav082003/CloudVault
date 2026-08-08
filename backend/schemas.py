@@ -23,7 +23,13 @@ class DocumentResponse(BaseModel):
     filename: str
     s3_key: str
     file_size: Optional[int]
+    file_type: Optional[str]
     uploaded_at: datetime
 
     class Config:
         from_attributes = True
+
+class StorageStats(BaseModel):
+    total_documents: int
+    total_size_bytes: int
+    recent_uploads: int
