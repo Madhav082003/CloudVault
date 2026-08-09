@@ -1,0 +1,11 @@
+# Copy this file to terraform.tfvars and fill in your values
+# terraform.tfvars is gitignored to protect secrets
+
+aws_region        = "ap-south-1"
+project_name      = "cloudvault"
+ec2_instance_type = "t3.micro"
+ec2_key_name      = "cloudvault-key"
+db_name           = "cloudvault"
+db_username       = "cloudvault"
+db_password       = "YOUR_DB_PASSWORD_HERE"
+s3_bucket_name    = "cloudvault-documents-madhav"
