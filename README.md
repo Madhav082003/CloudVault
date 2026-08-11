@@ -221,7 +221,7 @@ Every push to `main` branch automatically:
 
 ## 👨‍💻 Author
 
-**Madhav** — Final Year B.Tech ECE, JIIT Noida
+**Madhav** — Cloud Engineer,  B.Tech ECE, JIIT Noida
 
 ---
 
