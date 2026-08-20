@@ -224,5 +224,3 @@ Every push to `main` branch automatically:
 **Madhav** — Cloud Engineer,  B.Tech ECE, JIIT Noida
 
 ---
-
-*Built as part of a 10-day cloud engineering project*
